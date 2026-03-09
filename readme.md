@@ -8,9 +8,9 @@ The board evaluation function scores the position based on the material value of
 
 ## Gameplay Video
 
-Video of me playing against the AI:
+Video of me playing against the AI (I'm not good):
 
-[INSERT VIDEO LINK HERE]
+https://github.com/user-attachments/assets/4d0d2fa7-6958-4f7b-a80b-118fadb8e38a
 
 ## Features Implemented
 
