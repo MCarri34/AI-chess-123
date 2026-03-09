@@ -4,6 +4,7 @@
 #include <sstream>
 #include <cctype>
 #include <algorithm>
+#include "Evaluate.h"
 
 // Helpers for move generation
 static inline bool isWhitePieceChar(char c) {
@@ -36,6 +37,38 @@ static inline ChessPiece pieceFromStateChar(char c) {
     }
 }
 
+static inline void addRayMoves(std::vector<BitMove>& moves,
+                               const char* state,
+                               char color,
+                               int from,
+                               ChessPiece piece,
+                               int dx,
+                               int dy)
+{
+    int x = from % 8;
+    int y = from / 8;
+
+    x += dx;
+    y += dy;
+
+    while (x >= 0 && x < 8 && y >= 0 && y < 8) {
+        int to = y * 8 + x;
+        char dst = state[to];
+
+        if (dst == '0') {
+            moves.emplace_back(from, to, piece);
+        } else {
+            if (isEnemy(dst, color)) {
+                moves.emplace_back(from, to, piece);
+            }
+            break;
+        }
+
+        x += dx;
+        y += dy;
+    }
+}
+
 Chess::Chess()
 {
     _grid = new Grid(8, 8);
@@ -48,14 +81,25 @@ Chess::~Chess()
 
 char Chess::pieceNotation(int x, int y) const
 {
-    const char *wpieces = { "0PNBRQK" };
-    const char *bpieces = { "0pnbrqk" };
+    const char* wpieces = "0PNBRQK";
+    const char* bpieces = "0pnbrqk";
+
     Bit *bit = _grid->getSquare(x, y)->bit();
-    char notation = '0';
-    if (bit) {
-        notation = bit->gameTag() < 128 ? wpieces[bit->gameTag()] : bpieces[bit->gameTag() - 128];
+    if (!bit) return '0';
+
+    int tag = bit->gameTag();
+
+    // white piece tags: 1..6
+    if (tag >= 0 && tag < 7) {
+        return wpieces[tag];
     }
-    return notation;
+
+    // black piece tags: 129..134
+    if (tag >= 128 && (tag - 128) < 7) {
+        return bpieces[tag - 128];
+    }
+
+    return '0';
 }
 
 Bit* Chess::PieceForPlayer(const int playerNumber, ChessPiece piece)
@@ -80,6 +124,7 @@ Bit* Chess::PieceForPlayer(const int playerNumber, ChessPiece piece)
 void Chess::setUpBoard()
 {
     setNumberOfPlayers(2);
+    setAIPlayer(1); // Black is the AI
     _gameOptions.rowX = 8;
     _gameOptions.rowY = 8;
 
@@ -165,31 +210,6 @@ void Chess::FENtoBoard(const std::string& fen)
     }
 }
 
-static inline void addRayMoves(std::vector<BitMove>& moves, const char* state, char color, int from, ChessPiece piece, int dx, int dy)
-{
-    int fx = from % 8;
-    int fy = from / 8;
-
-    int x = fx + dx;
-    int y = fy + dy;
-
-    while (x >= 0 && x < 8 && y >= 0 && y < 8) {
-        int to = y * 8 + x;
-        char dst = state[to];
-
-        if (dst == '0') {
-            moves.emplace_back(from, to, piece);
-        } else {
-            if (isEnemy(dst, color)) {
-                moves.emplace_back(from, to, piece); // capture
-            }
-            break; // stop on first piece either way
-        }
-
-        x += dx;
-        y += dy;
-    }
-}
 
 // Move generation
 std::vector<BitMove> Chess::generateMoves(const char* state, char color)
@@ -366,6 +386,125 @@ std::vector<BitMove> Chess::generateAllMoves(const char* state, char color)
     return generateMoves(state, color);
 }
 
+void Chess::tryMove(std::string &state, int from, int to)
+{
+    state[to] = state[from];
+    state[from] = '0';
+}
+
+void Chess::undoMove(std::string &state, int from, int to, char capturedPiece)
+{
+    state[from] = state[to];
+    state[to] = capturedPiece;
+}
+
+int Chess::evaluateBoard(const std::string &state) const
+{
+    int score = 0;
+
+    for (char piece : state) {
+        switch (piece) {
+            case 'P': score += 100; break;
+            case 'N': score += 320; break;
+            case 'B': score += 330; break;
+            case 'R': score += 500; break;
+            case 'Q': score += 900; break;
+            case 'K': score += 20000; break;
+
+            case 'p': score -= 100; break;
+            case 'n': score -= 320; break;
+            case 'b': score -= 330; break;
+            case 'r': score -= 500; break;
+            case 'q': score -= 900; break;
+            case 'k': score -= 20000; break;
+
+            default: break;
+        }
+    }
+
+    return score;
+}
+
+bool Chess::isTerminal(const std::string &state) const
+{
+    bool whiteKing = false;
+    bool blackKing = false;
+
+    for (char c : state) {
+        if (c == 'K') whiteKing = true;
+        if (c == 'k') blackKing = true;
+    }
+
+    return !whiteKing || !blackKing;
+}
+
+int Chess::negamax(std::string &state, int depth, int alpha, int beta, int playerColor)
+{
+    if (depth == 0 || isTerminal(state)) {
+        return evaluateBoard(state) * playerColor;
+    }
+
+    char sideToMove = (playerColor == 1) ? 'w' : 'b';
+    std::vector<BitMove> moves = generateAllMoves(state.c_str(), sideToMove);
+
+    if (moves.empty()) {
+        return evaluateBoard(state) * playerColor;
+    }
+
+    int bestValue = -999999;
+
+    for (const BitMove &move : moves) {
+        char capturedPiece = state[move.to];
+        tryMove(state, move.from, move.to);
+
+        int value = -negamax(state, depth - 1, -beta, -alpha, -playerColor);
+
+        undoMove(state, move.from, move.to, capturedPiece);
+
+        if (value > bestValue) bestValue = value;
+        if (value > alpha) alpha = value;
+        if (alpha >= beta) break; // alpha-beta prune
+    }
+
+    return bestValue;
+}
+
+void Chess::updateAI()
+{
+    // AI only plays as Black
+    if (getCurrentPlayer()->playerNumber() != 1) return;
+
+    std::string baseState = stateString();
+    std::vector<BitMove> moves = generateAllMoves(baseState.c_str(), 'b');
+
+    if (moves.empty()) return;
+
+    int bestScore = -999999;
+    BitMove bestMove = moves[0];
+
+    for (const BitMove &move : moves) {
+        std::string testState = baseState;
+        tryMove(testState, move.from, move.to);
+
+        // depth 3 total
+        int score = -negamax(testState, 2, -999999, 999999, 1);
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+    }
+
+    // apply best move to board state
+    tryMove(baseState, bestMove.from, bestMove.to);
+
+    // update only changed squares
+    setStateString(baseState);
+
+    clearBoardHighlights();
+    endTurn();
+}
+
 void Chess::clearBoardHighlights()
 {
     // Call base version first
@@ -519,6 +658,12 @@ bool Chess::canBitMoveFromTo(Bit &bit, BitHolder &src, BitHolder &dst)
     return ok;
 }
 
+void Chess::endTurn()
+{
+    clearBoardHighlights();
+    Game::endTurn();
+}
+
 void Chess::stopGame()
 {
     _grid->forEachSquare([](ChessSquare* square, int, int) {
@@ -574,9 +719,51 @@ void Chess::setStateString(const std::string &s)
 {
     _grid->forEachSquare([&](ChessSquare* square, int x, int y) {
         int index = y * 8 + x;
-        char playerNumber = s[index] - '0';
-        if (playerNumber) {
-            square->setBit(PieceForPlayer(playerNumber - 1, Pawn));
+        char newChar = s[index];
+        char oldChar = pieceNotation(x, y);
+
+        // If this square is already correct, leave it alone
+        if (newChar == oldChar) return;
+
+        // Clear old piece if needed
+        if (square->bit()) {
+            square->destroyBit();
+        }
+
+        if (newChar == '0') {
+            square->setBit(nullptr);
+            return;
+        }
+
+        ChessPiece piece = NoPiece;
+        int playerNumber = 0; // 0 = white, 1 = black
+
+        switch (newChar)
+        {
+            // White
+            case 'P': piece = Pawn;   playerNumber = 0; break;
+            case 'N': piece = Knight; playerNumber = 0; break;
+            case 'B': piece = Bishop; playerNumber = 0; break;
+            case 'R': piece = Rook;   playerNumber = 0; break;
+            case 'Q': piece = Queen;  playerNumber = 0; break;
+            case 'K': piece = King;   playerNumber = 0; break;
+
+            // Black
+            case 'p': piece = Pawn;   playerNumber = 1; break;
+            case 'n': piece = Knight; playerNumber = 1; break;
+            case 'b': piece = Bishop; playerNumber = 1; break;
+            case 'r': piece = Rook;   playerNumber = 1; break;
+            case 'q': piece = Queen;  playerNumber = 1; break;
+            case 'k': piece = King;   playerNumber = 1; break;
+
+            default:
+                piece = NoPiece;
+                break;
+        }
+
+        if (piece != NoPiece) {
+            Bit* b = PieceForPlayer(playerNumber, piece);
+            square->dropBitAtPoint(b, ImVec2(0, 0));
         } else {
             square->setBit(nullptr);
         }

@@ -36,12 +36,20 @@ public:
     Grid* getGrid() override { return _grid; }
     std::vector<BitMove> generateMoves(const char* state, char color);
     std::vector<BitMove> generateAllMoves(const char* state, char color);
+    void updateAI() override;
+    void endTurn() override;
     
 private:
     Bit* PieceForPlayer(const int playerNumber, ChessPiece piece);
     Player* ownerAt(int x, int y) const;
     void FENtoBoard(const std::string& fen);
     char pieceNotation(int x, int y) const;
+
+    void tryMove(std::string &state, int from, int to);
+    void undoMove(std::string &state, int from, int to, char capturedPiece);
+    int evaluateBoard(const std::string &state) const;
+    bool isTerminal(const std::string &state) const;
+    int negamax(std::string &state, int depth, int alpha, int beta, int playerColor);
 
     Grid* _grid;
 
